@@ -1,7 +1,7 @@
 [project]
 name = "process-resource-tracker"
 version = "0.1.0"
-description = "Add your description here"
+description = "Monitors all processes that belong to a given `systemd` service cgroup and reports per-process resource usage over time"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = []
