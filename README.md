@@ -4,6 +4,8 @@
 
 It is designed for Linux hosts and reads data directly from `/proc` and `/sys/fs/cgroup`, so it has no third-party Python dependencies.
 
+This project was created because there was no good system for tracking a process and all children and sub-children over time.
+
 ## What It Tracks
 
 For each PID discovered under the service cgroup, the script tracks:
