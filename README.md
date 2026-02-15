@@ -61,6 +61,7 @@ python3 track_process_resources.py --service <name>.service [options]
 - `--duration` (default `0`): total runtime in seconds
   - `0` means run until interrupted (`Ctrl+C`)
 - `--live`: show a live top-like curses UI during sampling
+- `--show-cmdline`: include full process command line in both live and final summary output
 
 ## Examples
 
@@ -82,6 +83,12 @@ Run with live view:
 ./track_process_resources.py --service nginx.service --live
 ```
 
+Run with full command lines in output:
+
+```bash
+./track_process_resources.py --service nginx.service --duration 20 --show-cmdline
+```
+
 Live mode controls:
 
 - `q`: quit
@@ -96,6 +103,7 @@ At the end of collection, the script prints a table like:
 - `MEM_MB(min/max/avg)`
 - `DISK_Bps(min/max/avg)`
 - `XFER_Bps(min/max/avg)`
+- `CMDLINE` (only when `--show-cmdline` is enabled)
 
 Notes:
 

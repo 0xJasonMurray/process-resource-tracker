@@ -71,6 +71,7 @@ class ProcessStats:
     current_mem: float = 0.0
     current_disk: float = 0.0
     current_xfer: float = 0.0
+    cmdline: str = ""
 
 
 @dataclass
@@ -125,6 +126,23 @@ def read_io_counters(pid: int) -> Optional[Tuple[int, int]]:
             return (disk_total, xfer_total)
     except (FileNotFoundError, PermissionError, ProcessLookupError, ValueError):
         return None
+
+
+def read_cmdline(pid: int) -> Optional[str]:
+    path = f"/proc/{pid}/cmdline"
+    try:
+        with open(path, "rb") as f:
+            raw = f.read()
+    except (FileNotFoundError, PermissionError, ProcessLookupError):
+        return None
+
+    if not raw:
+        return None
+
+    parts = [p.decode("utf-8", errors="replace") for p in raw.split(b"\x00") if p]
+    if not parts:
+        return None
+    return " ".join(parts)
 
 
 def get_service_cgroup(service: str) -> Optional[str]:
@@ -196,15 +214,23 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="display a top-like real-time interface while sampling",
     )
+    parser.add_argument(
+        "--show-cmdline",
+        action="store_true",
+        help="include full process command line in live and summary output",
+    )
     return parser.parse_args()
 
 
-def print_header() -> None:
-    print(
+def print_header(include_cmdline: bool = False) -> None:
+    header = (
         "PID      NAME                 PPID     "
         "CPU%(min/max/avg)          MEM_MB(min/max/avg)      "
         "DISK_Bps(min/max/avg)      XFER_Bps(min/max/avg)"
     )
+    if include_cmdline:
+        header += " CMDLINE"
+    print(header)
 
 
 def fmt_triplet(values: Tuple[float, float, float], precision: int = 2) -> str:
@@ -219,6 +245,7 @@ def sample_once(
     page_size: int,
     stats_by_pid: Dict[int, ProcessStats],
     prev_by_pid: Dict[int, PrevSample],
+    include_cmdline: bool = False,
 ) -> int:
     tracked = pids_in_service_cgroup(service)
     if not tracked:
@@ -230,6 +257,7 @@ def sample_once(
             continue
         name, ppid, cpu_ticks, rss_pages = stat
         io_counters = read_io_counters(pid)
+        cmdline = read_cmdline(pid) if include_cmdline else None
         disk_total = io_counters[0] if io_counters is not None else None
         xfer_total = io_counters[1] if io_counters is not None else None
         rss_bytes = rss_pages * page_size
@@ -242,10 +270,13 @@ def sample_once(
                 ppid=ppid,
                 first_seen=now,
                 last_seen=now,
+                cmdline=cmdline or "",
             )
             stats_by_pid[pid] = record
         else:
             record.last_seen = now
+            if include_cmdline and cmdline:
+                record.cmdline = cmdline
 
         prev = prev_by_pid.get(pid)
         cpu_pct: Optional[float] = None
@@ -319,6 +350,7 @@ def render_live(
     page_size: int,
     stats_by_pid: Dict[int, ProcessStats],
     prev_by_pid: Dict[int, PrevSample],
+    include_cmdline: bool,
 ) -> None:
     stdscr.nodelay(True)
     curses.curs_set(0)
@@ -328,7 +360,15 @@ def render_live(
         if end_at is not None and now >= end_at:
             break
 
-        tracked_count = sample_once(service, now, clk_tck, page_size, stats_by_pid, prev_by_pid)
+        tracked_count = sample_once(
+            service,
+            now,
+            clk_tck,
+            page_size,
+            stats_by_pid,
+            prev_by_pid,
+            include_cmdline=include_cmdline,
+        )
 
         stdscr.erase()
         height, width = stdscr.getmaxyx()
@@ -340,6 +380,8 @@ def render_live(
         stdscr.addnstr(0, 0, status, max(0, width - 1))
 
         header = "PID      NAME                 PPID     CPU%      MEM_MB    DISK_Bps    XFER_Bps"
+        if include_cmdline:
+            header += " CMDLINE"
         stdscr.addnstr(1, 0, header, max(0, width - 1))
 
         rows = sorted(
@@ -359,6 +401,8 @@ def render_live(
                 f"{rec.current_disk:>10.2f} "
                 f"{rec.current_xfer:>10.2f}"
             )
+            if include_cmdline:
+                line += f" {rec.cmdline}"
             stdscr.addnstr(row_idx, 0, line, max(0, width - 1))
             row_idx += 1
 
@@ -402,6 +446,7 @@ def main() -> int:
             page_size,
             stats_by_pid,
             prev_by_pid,
+            args.show_cmdline,
         )
     else:
         print(f"Tracking service={args.service} interval={args.interval:.2f}s")
@@ -419,6 +464,7 @@ def main() -> int:
                 page_size,
                 stats_by_pid,
                 prev_by_pid,
+                include_cmdline=args.show_cmdline,
             )
             sleep_left = args.interval - (time.monotonic() - now)
             if sleep_left > 0:
@@ -429,7 +475,7 @@ def main() -> int:
         return 1
 
     print()
-    print_header()
+    print_header(include_cmdline=args.show_cmdline)
 
     for pid in sorted(stats_by_pid):
         rec = stats_by_pid[pid]
@@ -445,13 +491,16 @@ def main() -> int:
         disk_min, disk_max, disk_avg = rec.disk.as_tuple()
         xfer_min, xfer_max, xfer_avg = rec.xfer.as_tuple()
 
-        print(
+        line = (
             f"{pid:<8d} {rec.name[:20]:<20} {rec.ppid:<8d} "
             f"{fmt_triplet((cpu_min, cpu_max, cpu_avg), 2):<24} "
             f"{fmt_triplet(mem_triplet, 2):<25} "
             f"{fmt_triplet((disk_min, disk_max, disk_avg), 2):<24} "
             f"{fmt_triplet((xfer_min, xfer_max, xfer_avg), 2)}"
         )
+        if args.show_cmdline:
+            line += f" {rec.cmdline}"
+        print(line)
 
     return 0
 
